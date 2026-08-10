@@ -1,4 +1,4 @@
-# Enterprise AI Knowledge Assistant
+# AI Knowledge Assistant
 
 <p align="left">
   <img src="docs/badges/python.svg" alt="Python 3.12" height="28">
