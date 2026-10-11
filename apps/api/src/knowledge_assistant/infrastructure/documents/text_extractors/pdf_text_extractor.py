@@ -2,7 +2,6 @@ import asyncio
 from io import BytesIO
 
 from pypdf import PdfReader
-from pypdf.errors import PdfReadError
 
 from knowledge_assistant.domain.documents.text_extractor import (
     DocumentTextExtractor,
@@ -12,6 +11,15 @@ from knowledge_assistant.domain.documents.text_extractor import (
 
 
 class PDFTextExtractor(DocumentTextExtractor):
+    def __init__(
+        self,
+        *,
+        max_pages: int = 500,
+        max_text_characters: int = 5_000_000,
+    ) -> None:
+        self._max_pages = max_pages
+        self._max_text_characters = max_text_characters
+
     async def extract(
         self,
         *,
@@ -27,8 +35,8 @@ class PDFTextExtractor(DocumentTextExtractor):
             file_content,
         )
 
-    @staticmethod
     def _extract_sync(
+        self,
         file_content: bytes,
     ) -> ExtractedDocument:
         try:
@@ -36,34 +44,56 @@ class PDFTextExtractor(DocumentTextExtractor):
                 BytesIO(file_content),
                 strict=False,
             )
-        except PdfReadError as exc:
+            if reader.is_encrypted:
+                raise ValueError(
+                    "Password-protected PDF files are not supported."
+                )
+
+            if len(reader.pages) > self._max_pages:
+                raise ValueError(
+                    "The PDF exceeds the configured page limit."
+                )
+        except ValueError:
+            raise
+        except Exception as exc:
             raise ValueError(
                 "The uploaded PDF is invalid or corrupted."
             ) from exc
 
-        if reader.is_encrypted:
-            raise ValueError(
-                "Password-protected PDF files are not supported."
-            )
-
         segments: list[ExtractedTextSegment] = []
+        extracted_characters = 0
 
-        for page_number, page in enumerate(
-            reader.pages,
-            start=1,
-        ):
-            page_text = page.extract_text() or ""
-            page_text = page_text.strip()
+        try:
+            for page_number, page in enumerate(
+                reader.pages,
+                start=1,
+            ):
+                page_text = page.extract_text() or ""
+                page_text = page_text.strip()
 
-            if not page_text:
-                continue
+                if not page_text:
+                    continue
 
-            segments.append(
-                ExtractedTextSegment(
-                    text=page_text,
-                    page_number=page_number,
+                extracted_characters += len(page_text)
+                if segments:
+                    extracted_characters += 2
+                if extracted_characters > self._max_text_characters:
+                    raise ValueError(
+                        "The document exceeds the extracted text limit."
+                    )
+
+                segments.append(
+                    ExtractedTextSegment(
+                        text=page_text,
+                        page_number=page_number,
+                    )
                 )
-            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                "The uploaded PDF is invalid or corrupted."
+            ) from exc
 
         if not segments:
             raise ValueError(

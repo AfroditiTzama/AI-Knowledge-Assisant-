@@ -1,6 +1,6 @@
 import json
-import unicodedata
 import re
+import unicodedata
 from typing import Any
 from uuid import UUID
 
@@ -15,6 +15,10 @@ from knowledge_assistant.domain.wiki.compiler import (
     WikiCompilation,
     WikiCompiler,
     WikiPageDraft,
+)
+from knowledge_assistant.infrastructure.openrouter_errors import (
+    raise_openrouter_request_error,
+    raise_openrouter_response_error,
 )
 
 
@@ -234,25 +238,29 @@ class OpenRouterWikiCompiler(WikiCompiler):
             separators=(",", ":"),
         ).encode("utf-8")
 
-        async with httpx.AsyncClient(
-            timeout=self._timeout_seconds,
-        ) as client:
-            response = await client.post(
-                self._base_url,
-                headers=headers,
-                content=request_body,
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout_seconds,
+            ) as client:
+                response = await client.post(
+                    self._base_url,
+                    headers=headers,
+                    content=request_body,
+                )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise_openrouter_request_error(
+                error,
+                operation="wiki compilation",
             )
 
         try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            raise RuntimeError(
-                "OpenRouter wiki compilation failed: "
-                f"{response.status_code} "
-                f"{response.text[:1000]}"
-            ) from error
-
-        return response.json()
+            return response.json()
+        except ValueError as error:
+            raise_openrouter_response_error(
+                error,
+                operation="wiki compilation",
+            )
 
     @staticmethod
     def _extract_finish_reason(

@@ -18,6 +18,9 @@ class DocumentMapper:
             status=model.status,
             created_at=model.created_at,
             updated_at=model.updated_at,
+            active_ingestion_generation=(
+                model.active_ingestion_generation
+            ),
         )
 
     @staticmethod
@@ -33,4 +36,7 @@ class DocumentMapper:
             status=entity.status,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
+            active_ingestion_generation=(
+                entity.active_ingestion_generation
+            ),
         )

@@ -9,7 +9,6 @@ from knowledge_assistant.application.users.commands.register_user import (
     RegisterUserUseCase,
 )
 from knowledge_assistant.application.users.services.account_security import (
-    AccountSecurityService,
     RequestMetadata,
     SessionTokens,
 )
@@ -40,7 +39,9 @@ from knowledge_assistant.presentation.api.v1.schemas.auth import (
     SecurityEventResponse,
     SessionResponse,
 )
-
+from knowledge_assistant.presentation.middleware.client_ip import (
+    resolve_client_ip,
+)
 
 router = APIRouter(
     prefix="/auth",
@@ -54,12 +55,10 @@ RegisterUserDependency = Annotated[
 
 
 def _metadata(request: Request) -> RequestMetadata:
-    client_host = request.client.host if request.client else "unknown"
-    forwarded_for = request.headers.get("x-forwarded-for")
-    ip_address = (
-        forwarded_for.split(",", 1)[0].strip()
-        if forwarded_for
-        else client_host
+    settings = get_settings()
+    ip_address = resolve_client_ip(
+        request,
+        settings.trusted_proxy_networks,
     )
     return RequestMetadata(
         ip_address=ip_address[:64],
@@ -386,7 +385,6 @@ async def request_password_reset(
             "has been prepared."
         ),
         delivery=result.delivery,
-        debug_token=result.debug_token,
     )
 
 
@@ -429,7 +427,6 @@ async def request_email_verification(
     return ActionDispatchResponse(
         message="Verification instructions have been prepared.",
         delivery=result.delivery,
-        debug_token=result.debug_token,
     )
 
 

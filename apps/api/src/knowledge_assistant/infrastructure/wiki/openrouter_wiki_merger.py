@@ -11,6 +11,10 @@ from knowledge_assistant.domain.wiki.merger import (
     WikiMergeResult,
     WikiPageMerger,
 )
+from knowledge_assistant.infrastructure.openrouter_errors import (
+    raise_openrouter_request_error,
+    raise_openrouter_response_error,
+)
 
 
 class ConflictPayload(BaseModel):
@@ -89,28 +93,33 @@ class OpenRouterWikiPageMerger(WikiPageMerger):
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(
-            timeout=self._timeout_seconds,
-        ) as client:
-            response = await client.post(
-                self._base_url,
-                headers=headers,
-                content=json.dumps(
-                    response_payload,
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                ).encode("utf-8"),
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout_seconds,
+            ) as client:
+                response = await client.post(
+                    self._base_url,
+                    headers=headers,
+                    content=json.dumps(
+                        response_payload,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8"),
+                )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise_openrouter_request_error(
+                error,
+                operation="wiki merge",
             )
 
         try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            raise RuntimeError(
-                "OpenRouter wiki merge failed: "
-                f"{response.status_code} {response.text[:1000]}"
-            ) from error
-
-        raw_content = self._extract_content(response.json())
+            raw_content = self._extract_content(response.json())
+        except ValueError as error:
+            raise_openrouter_response_error(
+                error,
+                operation="wiki merge",
+            )
 
         try:
             payload = MergePayload.model_validate_json(raw_content)

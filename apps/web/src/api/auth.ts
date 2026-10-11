@@ -64,7 +64,6 @@ export interface SecurityEvent {
 export interface ActionDispatchResponse {
   message: string;
   delivery: string;
-  debug_token?: string | null;
 }
 
 export async function login(credentials: {

@@ -1,15 +1,18 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
 
-class DocumentStatus(str, Enum):
+class DocumentStatus(str, Enum):  # noqa: UP042
     UPLOADED = "uploaded"
     QUEUED = "queued"
     PROCESSING = "processing"
     PROCESSED = "processed"
     FAILED = "failed"
+
+
+LEGACY_INGESTION_GENERATION = UUID(int=0)
 
 
 @dataclass
@@ -24,6 +27,7 @@ class Document:
     status: DocumentStatus
     created_at: datetime
     updated_at: datetime
+    active_ingestion_generation: UUID | None = None
 
     def __post_init__(self) -> None:
         if not self.original_filename.strip():
@@ -49,7 +53,7 @@ class Document:
         content_type: str | None,
         size_bytes: int,
     ) -> "Document":
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         return cls(
             id=uuid4(),
@@ -72,7 +76,12 @@ class Document:
         self.status = DocumentStatus.PROCESSING
         self._touch()
 
-    def mark_as_processed(self) -> None:
+    def mark_as_processed(
+        self,
+        ingestion_generation: UUID | None = None,
+    ) -> None:
+        if ingestion_generation is not None:
+            self.active_ingestion_generation = ingestion_generation
         self.status = DocumentStatus.PROCESSED
         self._touch()
 
@@ -81,4 +90,4 @@ class Document:
         self._touch()
 
     def _touch(self) -> None:
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)

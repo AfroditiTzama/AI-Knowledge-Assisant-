@@ -42,12 +42,16 @@ class EnqueueDocumentProcessingCommand:
                 created=False,
             )
 
-        document.mark_as_queued()
-        await self._document_repository.update(document)
-
         job = ProcessingJob.create_document_processing(
             owner_id=owner_id,
             document_id=document_id,
         )
-        job = await self._job_repository.add(job)
-        return EnqueueDocumentProcessingResult(job=job, created=True)
+        saved_job = await self._job_repository.add(job)
+        created = saved_job.id == job.id
+        if created:
+            document.mark_as_queued()
+            await self._document_repository.update(document)
+        return EnqueueDocumentProcessingResult(
+            job=saved_job,
+            created=created,
+        )

@@ -21,6 +21,7 @@ from knowledge_assistant.bootstrap.dependencies.document import (
 from knowledge_assistant.core.config import get_settings
 from knowledge_assistant.domain.auth.repository import AuthRepository
 from knowledge_assistant.domain.auth.token_service import TokenService
+from knowledge_assistant.domain.common.exceptions import AuthenticationError
 from knowledge_assistant.domain.documents.file_storage import FileStorage
 from knowledge_assistant.domain.documents.repository import DocumentRepository
 from knowledge_assistant.domain.notifications.email_delivery import EmailDelivery
@@ -147,22 +148,17 @@ async def get_authenticated_request(
     settings = get_settings()
     cookie_token = request.cookies.get(settings.access_cookie_name)
     bearer_token: str | None = None
+    authorization_header = request.headers.get("authorization")
 
     if credentials is not None:
         if credentials.scheme.lower() != "bearer":
-            from knowledge_assistant.domain.common.exceptions import (
-                AuthenticationError,
-            )
-
             raise AuthenticationError("Invalid authentication scheme.")
         bearer_token = credentials.credentials
+    elif authorization_header is not None:
+        raise AuthenticationError("Invalid Authorization header.")
 
-    token = cookie_token or bearer_token
+    token = bearer_token if authorization_header is not None else cookie_token
     if not token:
-        from knowledge_assistant.domain.common.exceptions import (
-            AuthenticationError,
-        )
-
         raise AuthenticationError(
             "Authentication credentials were not provided."
         )
@@ -171,7 +167,9 @@ async def get_authenticated_request(
     return AuthenticatedRequest(
         user=user,
         session_id=session.id,
-        token_source="cookie" if cookie_token else "bearer",
+        token_source=(
+            "bearer" if authorization_header is not None else "cookie"
+        ),
     )
 
 

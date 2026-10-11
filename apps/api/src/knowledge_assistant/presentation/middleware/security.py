@@ -1,6 +1,7 @@
 import asyncio
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
+from collections.abc import Callable
 from uuid import UUID
 
 import jwt
@@ -21,6 +22,9 @@ from knowledge_assistant.infrastructure.database.repositories.auth_repository im
 from knowledge_assistant.infrastructure.database.session import (
     AsyncSessionFactory,
 )
+from knowledge_assistant.presentation.middleware.client_ip import (
+    resolve_client_ip,
+)
 
 
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):
@@ -32,30 +36,45 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         "/auth/email-verification/request",
     }
 
-    def __init__(self, app) -> None:
+    def __init__(
+        self,
+        app,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         super().__init__(app)
         settings = get_settings()
         self._limit = settings.auth_rate_limit_requests
         self._window = settings.auth_rate_limit_window_seconds
-        self._requests: dict[str, deque[float]] = defaultdict(deque)
+        self._max_keys = settings.auth_rate_limit_max_keys
+        self._trusted_proxy_networks = settings.trusted_proxy_networks
+        self._clock = clock
+        self._requests: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = asyncio.Lock()
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path not in self._LIMITED_PATHS:
             return await call_next(request)
 
-        forwarded_for = request.headers.get("x-forwarded-for")
-        client_ip = (
-            forwarded_for.split(",", 1)[0].strip()
-            if forwarded_for
-            else request.client.host if request.client else "unknown"
+        client_ip = resolve_client_ip(
+            request,
+            self._trusted_proxy_networks,
         )
         key = f"{request.url.path}:{client_ip}"
-        now = time.monotonic()
+        now = self._clock()
 
         async with self._lock:
-            bucket = self._requests[key]
-            while bucket and now - bucket[0] > self._window:
+            self._prune_expired(now)
+            bucket = self._requests.get(key)
+            if bucket is None:
+                if len(self._requests) >= self._max_keys:
+                    self._requests.popitem(last=False)
+                bucket = deque()
+                self._requests[key] = bucket
+            else:
+                self._requests.move_to_end(key)
+
+            while bucket and now - bucket[0] >= self._window:
                 bucket.popleft()
             if len(bucket) >= self._limit:
                 retry_after = max(
@@ -75,30 +94,46 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
+    def _prune_expired(self, now: float) -> None:
+        expired_keys = [
+            key
+            for key, bucket in self._requests.items()
+            if not bucket or now - bucket[-1] >= self._window
+        ]
+        for key in expired_keys:
+            del self._requests[key]
+
 
 class CSRFMiddleware(BaseHTTPMiddleware):
     _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
     _EXEMPT_PATHS = {
         "/auth/login",
         "/auth/register",
-        "/auth/refresh",
-        "/auth/logout",
         "/auth/password-reset/request",
         "/auth/password-reset/confirm",
         "/auth/email-verification/confirm",
     }
+    _REFRESH_CSRF_PATHS = {"/auth/refresh", "/auth/logout"}
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if (
             request.method in self._SAFE_METHODS
             or request.url.path in self._EXEMPT_PATHS
-            or request.headers.get("authorization")
         ):
             return await call_next(request)
 
         settings = get_settings()
         access_token = request.cookies.get(settings.access_cookie_name)
-        if not access_token:
+        refresh_token = request.cookies.get(settings.refresh_cookie_name)
+        use_refresh_token = (
+            request.url.path in self._REFRESH_CSRF_PATHS
+            and refresh_token is not None
+        )
+        if not use_refresh_token and self._has_bearer_credentials(request):
+            return await call_next(request)
+
+        cookie_token = refresh_token if use_refresh_token else access_token
+        if not cookie_token:
             return await call_next(request)
 
         csrf_token = request.headers.get("x-csrf-token")
@@ -109,8 +144,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             )
 
         try:
-            payload = JWTTokenService().verify_token(access_token)
-            if payload.get("type") != "access":
+            payload = JWTTokenService().verify_token(cookie_token)
+            expected_type = "refresh" if use_refresh_token else "access"
+            if payload.get("type") != expected_type:
                 raise ValueError("unexpected token type")
             session_id = UUID(str(payload.get("sid")))
         except (jwt.PyJWTError, ValueError, TypeError):
@@ -137,3 +173,13 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+    @staticmethod
+    def _has_bearer_credentials(request: Request) -> bool:
+        authorization = request.headers.get("authorization", "")
+        scheme, separator, credentials = authorization.partition(" ")
+        return (
+            bool(separator)
+            and scheme.casefold() == "bearer"
+            and bool(credentials.strip())
+        )

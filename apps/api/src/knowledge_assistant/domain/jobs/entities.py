@@ -1,14 +1,14 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
 
-class ProcessingJobType(str, Enum):
+class ProcessingJobType(str, Enum):  # noqa: UP042
     DOCUMENT_PROCESSING = "document_processing"
 
 
-class ProcessingJobStatus(str, Enum):
+class ProcessingJobStatus(str, Enum):  # noqa: UP042
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -16,7 +16,7 @@ class ProcessingJobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class ProcessingJobStage(str, Enum):
+class ProcessingJobStage(str, Enum):  # noqa: UP042
     QUEUED = "queued"
     EXTRACTING = "extracting"
     CHUNKING = "chunking"
@@ -58,7 +58,7 @@ class ProcessingJob:
         document_id: UUID,
         max_attempts: int = 3,
     ) -> "ProcessingJob":
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return cls(
             id=uuid4(),
             owner_id=owner_id,
@@ -93,7 +93,7 @@ class ProcessingJob:
     def mark_running(self) -> None:
         if self.status != ProcessingJobStatus.QUEUED:
             raise ValueError("Only queued jobs can start running.")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.status = ProcessingJobStatus.RUNNING
         self.stage = ProcessingJobStage.EXTRACTING
         self.progress = max(self.progress, 5)
@@ -119,10 +119,10 @@ class ProcessingJob:
             return
         self.stage = stage
         self.progress = progress
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
 
     def mark_completed(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.status = ProcessingJobStatus.COMPLETED
         self.stage = ProcessingJobStage.COMPLETED
         self.progress = 100
@@ -131,7 +131,7 @@ class ProcessingJob:
         self.updated_at = now
 
     def mark_failed(self, error_message: str) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.status = ProcessingJobStatus.FAILED
         self.error_message = error_message.strip()[:2000] or "Unknown error"
         self.completed_at = now
@@ -140,7 +140,7 @@ class ProcessingJob:
     def requeue(self) -> None:
         if not self.can_retry:
             raise ValueError("This job cannot be retried.")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.status = ProcessingJobStatus.QUEUED
         self.stage = ProcessingJobStage.QUEUED
         self.progress = 0
@@ -152,11 +152,12 @@ class ProcessingJob:
     def recover_after_restart(self) -> None:
         if self.status != ProcessingJobStatus.RUNNING:
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.status = ProcessingJobStatus.QUEUED
         self.stage = ProcessingJobStage.QUEUED
         self.progress = 0
         self.error_message = None
+        self.attempts = max(0, self.attempts - 1)
         self.started_at = None
         self.completed_at = None
         self.updated_at = now

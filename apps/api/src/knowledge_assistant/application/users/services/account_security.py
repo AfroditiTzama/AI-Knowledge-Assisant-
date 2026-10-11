@@ -65,7 +65,6 @@ class AuthenticationResult:
 @dataclass(frozen=True, slots=True)
 class ActionDispatchResult:
     delivery: str
-    debug_token: str | None = None
 
 
 class AccountSecurityService:
@@ -418,10 +417,7 @@ class AccountSecurityService:
             event_type="PASSWORD_RESET_REQUESTED",
             metadata=metadata,
         )
-        return ActionDispatchResult(
-            delivery=self._settings.mail_delivery_mode,
-            debug_token=raw_token if self._settings.app_debug else None,
-        )
+        return ActionDispatchResult(delivery="accepted")
 
     async def confirm_password_reset(
         self,
@@ -490,7 +486,6 @@ class AccountSecurityService:
         )
         return ActionDispatchResult(
             delivery=self._settings.mail_delivery_mode,
-            debug_token=raw_token if self._settings.app_debug else None,
         )
 
     async def confirm_email_verification(

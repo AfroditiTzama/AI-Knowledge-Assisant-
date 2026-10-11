@@ -48,6 +48,9 @@ class SQLAlchemyDocumentRepository(DocumentRepository):
         document_model.content_type = document.content_type
         document_model.size_bytes = document.size_bytes
         document_model.status = document.status
+        document_model.active_ingestion_generation = (
+            document.active_ingestion_generation
+        )
         document_model.created_at = document.created_at
         document_model.updated_at = document.updated_at
 
@@ -85,6 +88,16 @@ class SQLAlchemyDocumentRepository(DocumentRepository):
         return [
             DocumentMapper.to_domain(document_model)
             for document_model in document_models
+        ]
+
+    async def list_all(self) -> list[Document]:
+        statement = select(DocumentModel).order_by(
+            DocumentModel.created_at.asc()
+        )
+        result = await self._session.execute(statement)
+        return [
+            DocumentMapper.to_domain(document_model)
+            for document_model in result.scalars().all()
         ]
 
     async def delete(self, document_id: UUID) -> None:

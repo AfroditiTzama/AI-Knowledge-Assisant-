@@ -1,10 +1,13 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from knowledge_assistant.domain.jobs.entities import (
     ProcessingJob,
+    ProcessingJobStage,
     ProcessingJobStatus,
 )
 from knowledge_assistant.domain.jobs.repository import ProcessingJobRepository
@@ -21,11 +24,21 @@ class SQLAlchemyProcessingJobRepository(ProcessingJobRepository):
         self._session = session
 
     async def add(self, job: ProcessingJob) -> ProcessingJob:
-        model = ProcessingJobMapper.to_model(job)
-        self._session.add(model)
-        await self._session.flush()
-        await self._session.refresh(model)
-        return ProcessingJobMapper.to_domain(model)
+        try:
+            async with self._session.begin_nested():
+                model = ProcessingJobMapper.to_model(job)
+                self._session.add(model)
+                await self._session.flush()
+                await self._session.refresh(model)
+            return ProcessingJobMapper.to_domain(model)
+        except IntegrityError:
+            active_job = await self.get_active_for_document(
+                owner_id=job.owner_id,
+                document_id=job.document_id,
+            )
+            if active_job is not None:
+                return active_job
+            raise
 
     async def update(self, job: ProcessingJob) -> ProcessingJob:
         model = await self._session.get(ProcessingJobModel, job.id)
@@ -122,22 +135,38 @@ class SQLAlchemyProcessingJobRepository(ProcessingJobRepository):
         ]
 
     async def claim_next_queued(self) -> ProcessingJob | None:
-        statement = (
-            select(ProcessingJobModel)
+        candidate = (
+            select(ProcessingJobModel.id)
             .where(
                 ProcessingJobModel.status == ProcessingJobStatus.QUEUED
             )
             .order_by(ProcessingJobModel.created_at.asc())
             .limit(1)
+            .with_for_update(skip_locked=True)
+            .scalar_subquery()
+        )
+        now = datetime.now(UTC)
+        statement = (
+            update(ProcessingJobModel)
+            .where(
+                ProcessingJobModel.id == candidate,
+                ProcessingJobModel.status == ProcessingJobStatus.QUEUED,
+            )
+            .values(
+                status=ProcessingJobStatus.RUNNING,
+                stage=ProcessingJobStage.EXTRACTING,
+                progress=5,
+                attempts=ProcessingJobModel.attempts + 1,
+                error_message=None,
+                started_at=now,
+                completed_at=None,
+                updated_at=now,
+            )
+            .returning(ProcessingJobModel)
         )
         result = await self._session.execute(statement)
         model = result.scalar_one_or_none()
-        if model is None:
-            return None
-
-        job = ProcessingJobMapper.to_domain(model)
-        job.mark_running()
-        return await self.update(job)
+        return ProcessingJobMapper.to_domain(model) if model is not None else None
 
     async def recover_interrupted(self) -> int:
         statement = select(ProcessingJobModel).where(
@@ -152,6 +181,7 @@ class SQLAlchemyProcessingJobRepository(ProcessingJobRepository):
             model.status = job.status
             model.stage = job.stage
             model.progress = job.progress
+            model.attempts = job.attempts
             model.error_message = job.error_message
             model.updated_at = job.updated_at
             model.started_at = job.started_at

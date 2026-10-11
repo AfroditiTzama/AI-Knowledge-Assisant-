@@ -45,12 +45,16 @@ const apiClient = axios.create({
 let refreshPromise: Promise<string> | null = null;
 
 async function requestSessionRotation(): Promise<string> {
+  const csrfToken = getCsrfToken();
   const response = await axios.post<RefreshPayload>(
     `${API_BASE_URL}/auth/refresh`,
     {},
     {
       withCredentials: true,
       timeout: 30_000,
+      headers: csrfToken
+        ? { "X-CSRF-Token": csrfToken }
+        : undefined,
     },
   );
   saveCsrfToken(response.data.csrf_token);

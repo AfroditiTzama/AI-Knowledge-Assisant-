@@ -1,7 +1,14 @@
+import os
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from knowledge_assistant.main import app
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "test-suite-signing-key-9f4b81c2d7e64350a2e8d6c1",
+)
+
+from knowledge_assistant.main import app  # noqa: E402
 
 
 @pytest.fixture

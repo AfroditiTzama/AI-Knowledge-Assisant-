@@ -1,6 +1,9 @@
 import math
 from uuid import UUID
 
+from knowledge_assistant.application.chat.services.citation_validator import (
+    validate_generated_answer,
+)
 from knowledge_assistant.domain.chat.answer_generator import (
     KnowledgeAnswerGenerator,
 )
@@ -77,6 +80,11 @@ class AskKnowledgeQuery:
                 owner_id
             )
         )
+        wiki_pages = [
+            page
+            for page in wiki_pages
+            if page.owner_id == owner_id
+        ]
 
         wiki_candidates = await self._rank_wiki_pages(
             pages=wiki_pages,
@@ -113,45 +121,43 @@ class AskKnowledgeQuery:
         vector_sources_added = False
 
         if use_vector_fallback:
+            owner_documents = (
+                await self._document_repository.list_by_owner_id(owner_id)
+            )
+            owner_documents_by_id = {
+                document.id: document
+                for document in owner_documents
+                if document.owner_id == owner_id
+                and document.active_ingestion_generation is not None
+            }
+            active_ingestion_generations = {
+                document.id: document.active_ingestion_generation
+                for document in owner_documents_by_id.values()
+            }
             vector_results = await self._vector_store.search(
                 owner_id=owner_id,
+                active_ingestion_generations=(
+                    active_ingestion_generations
+                ),
                 query_embedding=query_embedding,
                 limit=self._max_vector_chunks,
             )
-
-            document_titles: dict[UUID, str] = {}
 
             for result in vector_results:
                 if result.score < self._minimum_vector_score:
                     continue
 
-                if result.document_id not in document_titles:
-                    document = (
-                        await self._document_repository.get_by_id(
-                            result.document_id
-                        )
-                    )
+                document = owner_documents_by_id.get(result.document_id)
 
-                    if (
-                        document is not None
-                        and document.owner_id == owner_id
-                    ):
-                        document_titles[result.document_id] = (
-                            document.original_filename
-                        )
-                    else:
-                        document_titles[result.document_id] = (
-                            "Document source"
-                        )
+                if document is None:
+                    continue
 
                 sources.append(
                     RetrievedKnowledgeSource(
                         source_id=f"S{len(sources) + 1}",
                         source_type="document_chunk",
                         document_id=result.document_id,
-                        title=document_titles[
-                            result.document_id
-                        ],
+                        title=document.original_filename,
                         text=result.text,
                         page_number=result.page_number,
                         chunk_index=result.chunk_index,
@@ -163,29 +169,62 @@ class AskKnowledgeQuery:
 
         if not sources:
             return KnowledgeChatResult(
-                answer_markdown=(
-                    "Δεν βρέθηκαν σχετικές πληροφορίες στα "
-                    "διαθέσιμα έγγραφα."
+                answer_markdown=self._insufficient_evidence_answer(
+                    preferred_language
                 ),
                 retrieval_mode="none",
                 sources=(),
             )
 
-        generated_answer = (
-            await self._answer_generator.generate(
+        available_source_ids = frozenset(
+            source.source_id
+            for source in sources
+        )
+        validation_feedback: tuple[str, ...] = ()
+        validated_source_ids: tuple[str, ...] | None = None
+        answer_markdown = ""
+
+        for _attempt in range(2):
+            generated_answer = await self._answer_generator.generate(
                 question=cleaned_question,
                 sources=tuple(sources),
                 assistant_behavior=assistant_behavior,
                 preferred_language=preferred_language,
+                validation_feedback=validation_feedback,
             )
-        )
+            validation = validate_generated_answer(
+                answer_markdown=generated_answer.answer_markdown,
+                used_source_ids=generated_answer.used_source_ids,
+                available_source_ids=available_source_ids,
+            )
+
+            if validation.is_valid:
+                answer_markdown = generated_answer.answer_markdown
+                validated_source_ids = validation.cited_source_ids
+                break
+
+            validation_feedback = validation.failures
+
+        if validated_source_ids is None:
+            return KnowledgeChatResult(
+                answer_markdown=self._insufficient_evidence_answer(
+                    preferred_language
+                ),
+                retrieval_mode="none",
+                sources=(),
+            )
 
         visible_sources = self._select_visible_sources(
             sources=tuple(sources),
-            used_source_ids=(
-                generated_answer.used_source_ids
-            ),
+            used_source_ids=validated_source_ids,
         )
+
+        if not visible_sources:
+            return KnowledgeChatResult(
+                answer_markdown=answer_markdown,
+                retrieval_mode="none",
+                sources=(),
+            )
 
         wiki_sources_added = bool(wiki_candidates)
 
@@ -197,9 +236,7 @@ class AskKnowledgeQuery:
             retrieval_mode = "vector"
 
         return KnowledgeChatResult(
-            answer_markdown=(
-                generated_answer.answer_markdown
-            ),
+            answer_markdown=answer_markdown,
             retrieval_mode=retrieval_mode,
             sources=visible_sources,
         )
@@ -316,15 +353,26 @@ class AskKnowledgeQuery:
         sources: tuple[RetrievedKnowledgeSource, ...],
         used_source_ids: tuple[str, ...],
     ) -> tuple[RetrievedKnowledgeSource, ...]:
-        if not used_source_ids:
-            return sources
-
         used_source_id_set = set(used_source_ids)
 
-        selected_sources = tuple(
+        return tuple(
             source
             for source in sources
             if source.source_id in used_source_id_set
         )
 
-        return selected_sources or sources
+    @staticmethod
+    def _insufficient_evidence_answer(
+        preferred_language: str,
+    ) -> str:
+        if preferred_language == "el":
+            return (
+                "Τα διαθέσιμα έγγραφα δεν παρέχουν αρκετές "
+                "αξιόπιστα τεκμηριωμένες πληροφορίες για να "
+                "απαντηθεί αυτή η ερώτηση."
+            )
+
+        return (
+            "The available documents do not provide enough reliably "
+            "cited information to answer this question."
+        )

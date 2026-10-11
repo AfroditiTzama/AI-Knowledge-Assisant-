@@ -32,10 +32,19 @@ class LocalFileStorage(FileStorage):
 
         file_path = self._resolve_storage_path(stored_filename)
 
-        await asyncio.to_thread(
-            file_path.write_bytes,
-            file_content,
+        temporary_path = self._resolve_storage_path(
+            f".{stored_filename}.uploading"
         )
+        try:
+            await asyncio.to_thread(
+                temporary_path.write_bytes,
+                file_content,
+            )
+            await asyncio.to_thread(temporary_path.replace, file_path)
+        except Exception:
+            if await asyncio.to_thread(temporary_path.exists):
+                await asyncio.to_thread(temporary_path.unlink)
+            raise
 
         return StoredFile(
             stored_filename=stored_filename,

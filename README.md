@@ -103,6 +103,15 @@ In addition to document retrieval, it introduces a persistent **LLM Wiki layer**
 - Preservation of page numbers
 - Persistent chunk storage in SQLite
 
+### Ingestion Consistency
+
+- ChromaDB vectors are staged and verified under a processing-job generation.
+- SQLite activates the matching chunks and vector generation in one commit.
+- Retrieval filters vectors through the active generation stored on the document.
+- Failed or interrupted attempts retain the last successful generation.
+- The local worker requeues interrupted jobs and removes inactive vector generations.
+- A partial SQLite unique index permits only one queued or running job per document.
+
 ### Embeddings and Vector Search
 
 - Multilingual Sentence Transformer embeddings
@@ -583,13 +592,21 @@ Example:
 
 ```env
 APP_ENV=development
-APP_DEBUG=true
+APP_DEBUG=false
 
 DATABASE_URL=sqlite+aiosqlite:///./knowledge_assistant.db
 
 DOCUMENTS_STORAGE_DIRECTORY=storage/documents
+DOCUMENT_MAX_UPLOAD_BYTES=26214400
+DOCUMENT_UPLOAD_CHUNK_BYTES=1048576
+DOCUMENT_MAX_PDF_PAGES=500
+DOCUMENT_MAX_EXTRACTED_TEXT_CHARACTERS=5000000
+DOCUMENT_MAX_DOCX_UNCOMPRESSED_BYTES=104857600
+DOCUMENT_MAX_DOCX_ARCHIVE_ENTRIES=2048
+DOCUMENT_MAX_DOCX_COMPRESSION_RATIO=100
 CHROMA_STORAGE_DIRECTORY=storage/chroma
 
+# This placeholder is rejected at startup. Replace it using the command below.
 JWT_SECRET_KEY=replace-with-a-secret-of-at-least-32-characters
 JWT_ALGORITHM=HS256
 
@@ -600,9 +617,18 @@ OPENROUTER_API_KEY=replace-with-your-openrouter-api-key
 OPENROUTER_MODEL=google/gemini-2.5-flash
 
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
+# Leave empty for direct local connections. Configure only known reverse proxies.
+TRUSTED_PROXY_CIDRS=
 ```
 
 Do not commit the `.env` file.
+
+The document limits above default to a 25 MiB upload, 500 PDF pages,
+5,000,000 extracted characters, and 100 MiB of decompressed DOCX content.
+DOCX archives are also limited to 2,048 entries and a 100:1 per-entry
+compression ratio. The API reads multipart uploads in bounded 1 MiB chunks
+and returns HTTP 413 when the upload limit is exceeded.
 
 Generate a JWT secret with:
 
@@ -627,9 +653,17 @@ alembic upgrade head
 ```bash
 uvicorn knowledge_assistant.main:app \
   --reload \
+  --no-proxy-headers \
   --host 127.0.0.1 \
   --port 8000
 ```
+
+The authentication rate limiter stores a bounded set of counters in each API
+process. It is suitable for local and single-process deployments, but it is not
+a shared distributed limiter. Multi-process or multi-instance deployments need
+a shared limiter in a future deployment phase. Forwarded client IPs are used
+only when the immediate peer matches `TRUSTED_PROXY_CIDRS`; keep it empty for
+direct connections and list only proxy IP addresses or CIDR ranges you control.
 
 The API will be available at:
 

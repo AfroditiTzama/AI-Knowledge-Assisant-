@@ -22,4 +22,4 @@ RUN mkdir -p \
     /data/storage/documents \
     /data/storage/chroma
 
-CMD ["sh", "-c", "python -m alembic upgrade head && exec python -m uvicorn knowledge_assistant.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "python -m alembic upgrade head && exec python -m uvicorn knowledge_assistant.main:app --no-proxy-headers --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -26,6 +26,11 @@ class DocumentRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def list_all(self) -> list[Document]:
+        """Return all documents for internal maintenance."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def delete(self, document_id: UUID) -> None:
         """Delete a document and its owned persistence records."""
         raise NotImplementedError

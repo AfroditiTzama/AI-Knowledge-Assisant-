@@ -8,6 +8,9 @@ from knowledge_assistant.domain.documents.text_extractor import (
 
 
 class TXTTextExtractor(DocumentTextExtractor):
+    def __init__(self, *, max_text_characters: int = 5_000_000) -> None:
+        self._max_text_characters = max_text_characters
+
     async def extract(
         self,
         *,
@@ -23,12 +26,17 @@ class TXTTextExtractor(DocumentTextExtractor):
             file_content,
         )
 
-    @staticmethod
     def _extract_sync(
+        self,
         file_content: bytes,
     ) -> ExtractedDocument:
         text = TXTTextExtractor._decode_text(file_content)
         text = text.strip()
+
+        if len(text) > self._max_text_characters:
+            raise ValueError(
+                "The document exceeds the extracted text limit."
+            )
 
         if not text:
             raise ValueError(

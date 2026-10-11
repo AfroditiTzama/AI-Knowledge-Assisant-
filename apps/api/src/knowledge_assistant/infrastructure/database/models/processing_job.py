@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Uuid
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from knowledge_assistant.domain.jobs.entities import (
@@ -14,6 +14,14 @@ from knowledge_assistant.infrastructure.database.base import Base
 
 class ProcessingJobModel(Base):
     __tablename__ = "processing_jobs"
+    __table_args__ = (
+        Index(
+            "uq_processing_jobs_active_document",
+            "document_id",
+            unique=True,
+            sqlite_where=text("status IN ('QUEUED', 'RUNNING')"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),

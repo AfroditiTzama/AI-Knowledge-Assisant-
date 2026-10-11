@@ -85,7 +85,22 @@ def get_file_storage() -> FileStorage:
 
 @lru_cache
 def get_document_text_extractor() -> DocumentTextExtractor:
-    return CompositeDocumentTextExtractor()
+    settings = get_settings()
+    return CompositeDocumentTextExtractor(
+        max_pdf_pages=settings.document_max_pdf_pages,
+        max_extracted_text_characters=(
+            settings.document_max_extracted_text_characters
+        ),
+        max_docx_uncompressed_bytes=(
+            settings.document_max_docx_uncompressed_bytes
+        ),
+        max_docx_archive_entries=(
+            settings.document_max_docx_archive_entries
+        ),
+        max_docx_compression_ratio=(
+            settings.document_max_docx_compression_ratio
+        ),
+    )
 
 
 @lru_cache
@@ -136,9 +151,19 @@ def get_upload_document_command(
         Depends(get_file_storage),
     ],
 ) -> UploadDocumentCommand:
+    settings = get_settings()
     return UploadDocumentCommand(
         document_repository=document_repository,
         file_storage=file_storage,
+        max_docx_uncompressed_bytes=(
+            settings.document_max_docx_uncompressed_bytes
+        ),
+        max_docx_archive_entries=(
+            settings.document_max_docx_archive_entries
+        ),
+        max_docx_compression_ratio=(
+            settings.document_max_docx_compression_ratio
+        ),
     )
 
 

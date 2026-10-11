@@ -26,14 +26,37 @@ class VectorSearchResult:
 
 class VectorStore(ABC):
     @abstractmethod
-    async def replace_document_records(
+    async def stage_document_records(
         self,
         *,
         owner_id: UUID,
         document_id: UUID,
+        ingestion_generation: UUID,
         records: tuple[VectorRecord, ...],
     ) -> None:
-        """Replace all vector records belonging to one document."""
+        """Idempotently write and verify one inactive vector generation."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_document_generation(
+        self,
+        *,
+        owner_id: UUID,
+        document_id: UUID,
+        ingestion_generation: UUID,
+    ) -> None:
+        """Delete one explicitly identified inactive generation."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def cleanup_inactive_document_records(
+        self,
+        *,
+        owner_id: UUID,
+        document_id: UUID,
+        active_ingestion_generation: UUID | None,
+    ) -> None:
+        """Delete records that do not belong to the active generation."""
         raise NotImplementedError
 
     @abstractmethod
@@ -41,10 +64,11 @@ class VectorStore(ABC):
         self,
         *,
         owner_id: UUID,
+        active_ingestion_generations: dict[UUID, UUID],
         query_embedding: list[float],
         limit: int = 5,
     ) -> tuple[VectorSearchResult, ...]:
-        """Search only inside documents owned by the user."""
+        """Search only active document generations owned by the user."""
         raise NotImplementedError
 
     @abstractmethod

@@ -107,7 +107,11 @@ export default function AssistantPage() {
     setSourcePreviewContent(null);
 
     try {
-      if (source.source_type === "wiki_page" && source.slug) {
+      if (
+        (source.source_type === "wiki" ||
+          source.source_type === "wiki_page") &&
+        source.slug
+      ) {
         const page = await getWikiPage(source.slug);
 
         setSourcePreviewContent({

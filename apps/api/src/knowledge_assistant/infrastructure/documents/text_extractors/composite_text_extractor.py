@@ -16,26 +16,47 @@ from knowledge_assistant.infrastructure.documents.text_extractors.txt_text_extra
 
 
 class CompositeDocumentTextExtractor(DocumentTextExtractor):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_pdf_pages: int = 500,
+        max_extracted_text_characters: int = 5_000_000,
+        max_docx_uncompressed_bytes: int = 100 * 1024 * 1024,
+        max_docx_archive_entries: int = 2_048,
+        max_docx_compression_ratio: int = 100,
+    ) -> None:
+        pdf_extractor = PDFTextExtractor(
+            max_pages=max_pdf_pages,
+            max_text_characters=max_extracted_text_characters,
+        )
+        docx_extractor = DOCXTextExtractor(
+            max_text_characters=max_extracted_text_characters,
+            max_uncompressed_bytes=max_docx_uncompressed_bytes,
+            max_archive_entries=max_docx_archive_entries,
+            max_compression_ratio=max_docx_compression_ratio,
+        )
+        txt_extractor = TXTTextExtractor(
+            max_text_characters=max_extracted_text_characters,
+        )
         self._extractors_by_extension: dict[
             str,
             DocumentTextExtractor,
         ] = {
-            ".pdf": PDFTextExtractor(),
-            ".docx": DOCXTextExtractor(),
-            ".txt": TXTTextExtractor(),
+            ".pdf": pdf_extractor,
+            ".docx": docx_extractor,
+            ".txt": txt_extractor,
         }
 
         self._extractors_by_content_type: dict[
             str,
             DocumentTextExtractor,
         ] = {
-            "application/pdf": PDFTextExtractor(),
+            "application/pdf": pdf_extractor,
             (
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document"
-            ): DOCXTextExtractor(),
-            "text/plain": TXTTextExtractor(),
+            ): docx_extractor,
+            "text/plain": txt_extractor,
         }
 
     async def extract(

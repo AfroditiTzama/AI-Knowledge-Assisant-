@@ -78,6 +78,7 @@ source .env
 set +a
 
 python -m uvicorn knowledge_assistant.main:app \
+  --no-proxy-headers \
   --host 127.0.0.1 \
   --port 8000 \
   --reload

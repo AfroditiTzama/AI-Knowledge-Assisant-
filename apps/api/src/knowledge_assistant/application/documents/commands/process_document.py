@@ -1,6 +1,7 @@
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from knowledge_assistant.domain.documents.chunk_entities import (
     DocumentChunkEntity,
@@ -18,6 +19,7 @@ from knowledge_assistant.domain.documents.text_chunker import (
 from knowledge_assistant.domain.documents.text_extractor import (
     DocumentTextExtractor,
     ExtractedDocument,
+    ExtractedTextSegment,
 )
 from knowledge_assistant.domain.embeddings.service import EmbeddingService
 from knowledge_assistant.domain.jobs.entities import ProcessingJobStage
@@ -26,11 +28,13 @@ from knowledge_assistant.domain.vector_store.store import (
     VectorStore,
 )
 
-
 ProgressCallback = Callable[
     [ProcessingJobStage, int],
     Awaitable[None],
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,8 @@ class ProcessDocumentResult:
     document: Document
     extracted_document: ExtractedDocument
     chunks: tuple[DocumentChunk, ...]
+    ingestion_generation: UUID
+    previous_ingestion_generation: UUID | None
 
 
 class ProcessDocumentCommand:
@@ -64,12 +70,46 @@ class ProcessDocumentCommand:
         *,
         document_id: UUID,
         owner_id: UUID,
+        ingestion_generation: UUID | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> ProcessDocumentResult:
         document = await self._document_repository.get_by_id(document_id)
 
         if document is None or document.owner_id != owner_id:
             raise ValueError("Document was not found.")
+
+        generation = ingestion_generation or uuid4()
+        if document.active_ingestion_generation == generation:
+            active_entities = (
+                await self._document_chunk_repository.list_by_document_id(
+                    document.id
+                )
+            )
+            active_chunks = tuple(
+                DocumentChunk(
+                    index=chunk.chunk_index,
+                    text=chunk.text,
+                    page_number=chunk.page_number,
+                )
+                for chunk in active_entities
+            )
+            return ProcessDocumentResult(
+                document=document,
+                extracted_document=ExtractedDocument(
+                    segments=tuple(
+                        ExtractedTextSegment(
+                            text=chunk.text,
+                            page_number=chunk.page_number,
+                        )
+                        for chunk in active_entities
+                    )
+                ),
+                chunks=active_chunks,
+                ingestion_generation=generation,
+                previous_ingestion_generation=generation,
+            )
+
+        previous_generation = document.active_ingestion_generation
 
         document.mark_as_processing()
         document = await self._document_repository.update(document)
@@ -103,10 +143,14 @@ class ProcessDocumentCommand:
                 )
 
             chunk_entities = tuple(
-                DocumentChunkEntity.create(
+                DocumentChunkEntity(
+                    id=uuid5(
+                        NAMESPACE_URL,
+                        f"{document.id}:{generation}:{chunk.index}",
+                    ),
                     document_id=document.id,
                     chunk_index=chunk.index,
-                    text=chunk.text,
+                    text=chunk.text.strip(),
                     page_number=chunk.page_number,
                 )
                 for chunk in chunks
@@ -131,11 +175,6 @@ class ProcessDocumentCommand:
                 ProcessingJobStage.PERSISTING,
                 85,
             )
-            await self._document_chunk_repository.replace_for_document(
-                document_id=document.id,
-                chunks=chunk_entities,
-            )
-
             vector_records = tuple(
                 VectorRecord(
                     id=str(chunk_entity.id),
@@ -153,22 +192,43 @@ class ProcessDocumentCommand:
                 )
             )
 
-            await self._vector_store.replace_document_records(
+            await self._vector_store.stage_document_records(
                 owner_id=document.owner_id,
                 document_id=document.id,
+                ingestion_generation=generation,
                 records=vector_records,
             )
 
-            document.mark_as_processed()
+            await self._document_chunk_repository.replace_for_document(
+                document_id=document.id,
+                chunks=chunk_entities,
+            )
+
+            document.mark_as_processed(generation)
             document = await self._document_repository.update(document)
 
             return ProcessDocumentResult(
                 document=document,
                 extracted_document=extracted_document,
                 chunks=chunks,
+                ingestion_generation=generation,
+                previous_ingestion_generation=previous_generation,
             )
 
         except Exception:
+            if document.active_ingestion_generation != generation:
+                try:
+                    await self._vector_store.delete_document_generation(
+                        owner_id=document.owner_id,
+                        document_id=document.id,
+                        ingestion_generation=generation,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "Could not clean staged vector generation %s for document %s.",
+                        generation,
+                        document.id,
+                    )
             document.mark_as_failed()
             await self._document_repository.update(document)
             raise

@@ -27,10 +27,6 @@ import {
   type FormEvent,
 } from "react";
 import {
-  Link,
-} from "react-router-dom";
-
-import {
   changePassword,
   deleteAccount,
   getCurrentUser,
@@ -167,7 +163,6 @@ export default function ProfilePage() {
   const [busySessionId, setBusySessionId] = useState("");
   const [isSendingVerification, setIsSendingVerification] =
     useState(false);
-  const [verificationToken, setVerificationToken] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
@@ -312,12 +307,10 @@ export default function ProfilePage() {
   async function handleVerificationRequest() {
     resetFeedback();
     setIsSendingVerification(true);
-    setVerificationToken("");
 
     try {
       const result = await requestEmailVerification();
       setNotice(result.message);
-      setVerificationToken(result.debug_token ?? "");
     } catch (requestError) {
       setError(getApiErrorMessage(requestError));
     } finally {
@@ -596,24 +589,6 @@ export default function ProfilePage() {
                     ? "Preparing..."
                     : "Send verification"}
                 </button>
-              </div>
-            )}
-
-            {verificationToken && (
-              <div className="developer-token-card">
-                <strong>Local outbox verification</strong>
-                <p>
-                  In development mode, use this direct link to test
-                  verification.
-                </p>
-                <Link
-                  className="secondary-button"
-                  to={`/verify-email?token=${encodeURIComponent(
-                    verificationToken,
-                  )}`}
-                >
-                  Verify email now
-                </Link>
               </div>
             )}
           </section>

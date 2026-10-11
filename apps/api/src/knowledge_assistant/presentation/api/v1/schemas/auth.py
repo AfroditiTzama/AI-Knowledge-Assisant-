@@ -80,7 +80,6 @@ class EmailVerificationConfirmRequest(BaseModel):
 class ActionDispatchResponse(BaseModel):
     message: str
     delivery: str
-    debug_token: str | None = None
 
 
 class SessionResponse(BaseModel):

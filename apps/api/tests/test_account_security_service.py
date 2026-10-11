@@ -18,6 +18,9 @@ from knowledge_assistant.domain.notifications.email_delivery import (
 )
 from knowledge_assistant.domain.security.password_hasher import PasswordHasher
 from knowledge_assistant.domain.users.entities import User
+from knowledge_assistant.presentation.api.v1.schemas.auth import (
+    ActionDispatchResponse,
+)
 
 
 class FakeUsers:
@@ -156,7 +159,12 @@ class FakeEmailDelivery(EmailDelivery):
         self.messages.append(message)
 
 
-def build_service() -> tuple[AccountSecurityService, User, FakeAuth]:
+def build_service() -> tuple[
+    AccountSecurityService,
+    User,
+    FakeAuth,
+    FakeEmailDelivery,
+]:
     now = datetime.now(UTC)
     user = User(
         id=uuid4(),
@@ -174,23 +182,24 @@ def build_service() -> tuple[AccountSecurityService, User, FakeAuth]:
         email_verified_at=None,
     )
     auth = FakeAuth()
+    email_delivery = FakeEmailDelivery()
     service = AccountSecurityService(
         users=FakeUsers(user),
         auth=auth,
         password_hasher=FakeHasher(),
         token_service=FakeTokens(),
-        email_delivery=FakeEmailDelivery(),
+        email_delivery=email_delivery,
         settings=Settings(
-            jwt_secret_key="x" * 64,
+            jwt_secret_key="test-signing-key-2f5e932ac1744cc98959190c",
             app_debug=True,
         ),
     )
-    return service, user, auth
+    return service, user, auth, email_delivery
 
 
 @pytest.mark.asyncio
 async def test_login_and_refresh_rotate_session_token() -> None:
-    service, user, auth = build_service()
+    service, user, auth, _ = build_service()
     metadata = RequestMetadata("127.0.0.1", "pytest")
 
     login = await service.login(
@@ -210,7 +219,7 @@ async def test_login_and_refresh_rotate_session_token() -> None:
 
 @pytest.mark.asyncio
 async def test_password_change_invalidates_previous_auth_version() -> None:
-    service, user, _ = build_service()
+    service, user, _, _ = build_service()
     metadata = RequestMetadata("127.0.0.1", "pytest")
     login = await service.login(
         email=str(user.email),
@@ -232,7 +241,7 @@ async def test_password_change_invalidates_previous_auth_version() -> None:
 
 @pytest.mark.asyncio
 async def test_login_is_locked_after_repeated_failures() -> None:
-    service, user, _ = build_service()
+    service, user, _, _ = build_service()
     metadata = RequestMetadata("127.0.0.1", "pytest")
 
     for _ in range(5):
@@ -249,3 +258,54 @@ async def test_login_is_locked_after_repeated_failures() -> None:
             password="Password123",
             metadata=metadata,
         )
+
+
+@pytest.mark.asyncio
+async def test_password_reset_does_not_expose_token_or_account_status() -> None:
+    service, user, _, email_delivery = build_service()
+    metadata = RequestMetadata("127.0.0.1", "pytest")
+
+    existing_account = await service.request_password_reset(
+        email=str(user.email),
+        metadata=metadata,
+    )
+    unknown_account = await service.request_password_reset(
+        email="unknown@example.com",
+        metadata=metadata,
+    )
+
+    assert existing_account == unknown_account
+    assert existing_account.delivery == "accepted"
+    assert not hasattr(existing_account, "debug_token")
+    assert len(email_delivery.messages) == 1
+    assert "/reset-password?token=" in email_delivery.messages[0].text_body
+
+
+@pytest.mark.asyncio
+async def test_email_verification_keeps_outbox_link_private() -> None:
+    service, user, _, email_delivery = build_service()
+
+    result = await service.request_email_verification(
+        user=user,
+        metadata=RequestMetadata("127.0.0.1", "pytest"),
+    )
+
+    assert result.delivery == "outbox"
+    assert not hasattr(result, "debug_token")
+    assert len(email_delivery.messages) == 1
+    assert "/verify-email?token=" in email_delivery.messages[0].text_body
+
+
+def test_action_dispatch_response_has_no_token_field() -> None:
+    response = ActionDispatchResponse.model_validate(
+        {
+            "message": "Instructions have been prepared.",
+            "delivery": "accepted",
+            "debug_token": "must-not-be-serialized",
+        }
+    )
+
+    assert response.model_dump() == {
+        "message": "Instructions have been prepared.",
+        "delivery": "accepted",
+    }

@@ -1,6 +1,5 @@
-from uuid import UUID
-
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
@@ -15,17 +14,16 @@ from knowledge_assistant.bootstrap.dependencies.jobs import (
     ProcessingJobRepositoryDependency,
 )
 from knowledge_assistant.bootstrap.dependencies.user import get_current_user
+from knowledge_assistant.core.config import get_settings
 from knowledge_assistant.domain.users.entities import User
 from knowledge_assistant.presentation.api.v1.schemas.document import (
     DocumentChunkPreviewResponse,
     DocumentResponse,
 )
-
 from knowledge_assistant.presentation.api.v1.schemas.job import (
     EnqueueProcessingJobResponse,
     ProcessingJobResponse,
 )
-
 
 router = APIRouter(
     prefix="/documents",
@@ -53,7 +51,12 @@ async def upload_document(
     command: UploadDocumentCommandDependency,
 ) -> DocumentResponse:
     try:
-        file_content = await file.read()
+        settings = get_settings()
+        file_content = await _read_upload_bounded(
+            file,
+            max_bytes=settings.document_max_upload_bytes,
+            chunk_bytes=settings.document_upload_chunk_bytes,
+        )
 
         document = await command.execute(
             owner_id=current_user.id,
@@ -72,6 +75,26 @@ async def upload_document(
 
     finally:
         await file.close()
+
+
+async def _read_upload_bounded(
+    file: UploadFile,
+    *,
+    max_bytes: int,
+    chunk_bytes: int,
+) -> bytes:
+    content = bytearray()
+    while True:
+        remaining = max_bytes - len(content)
+        chunk = await file.read(min(chunk_bytes, remaining + 1))
+        if not chunk:
+            return bytes(content)
+        content.extend(chunk)
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="Uploaded file exceeds the configured size limit.",
+            )
 
 
 @router.get(

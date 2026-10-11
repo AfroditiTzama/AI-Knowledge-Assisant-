@@ -31,7 +31,6 @@ from knowledge_assistant.infrastructure.database.repositories.processing_job_rep
 )
 from knowledge_assistant.infrastructure.database.session import AsyncSessionFactory
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +77,27 @@ class LocalProcessingWorker:
                 "Recovered %s interrupted processing job(s).",
                 recovered,
             )
+        await self._cleanup_inactive_vectors()
+
+    async def _cleanup_inactive_vectors(self) -> None:
+        async with AsyncSessionFactory() as session:
+            documents = await SQLAlchemyDocumentRepository(session).list_all()
+
+        vector_store = get_vector_store()
+        for document in documents:
+            try:
+                await vector_store.cleanup_inactive_document_records(
+                    owner_id=document.owner_id,
+                    document_id=document.id,
+                    active_ingestion_generation=(
+                        document.active_ingestion_generation
+                    ),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Could not clean inactive vectors for document %s.",
+                    document.id,
+                )
 
     async def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -123,6 +143,16 @@ class LocalProcessingWorker:
                 vector_store=get_vector_store(),
             )
 
+            document = await document_repository.get_by_id(job.document_id)
+            if (
+                document is not None
+                and document.owner_id == job.owner_id
+                and document.active_ingestion_generation == job.id
+            ):
+                await session.rollback()
+                await self._mark_completed(job.id)
+                return
+
             async def report(
                 stage: ProcessingJobStage,
                 progress: int,
@@ -148,18 +178,63 @@ class LocalProcessingWorker:
                 await session.commit()
 
             try:
-                await command.execute(
+                result = await command.execute(
                     document_id=job.document_id,
                     owner_id=job.owner_id,
+                    ingestion_generation=job.id,
                     progress_callback=report,
                 )
                 await session.commit()
             except Exception:
-                # ProcessDocumentCommand records the document FAILED state.
-                await session.commit()
+                await session.rollback()
+                await self._mark_document_failed(
+                    document_id=job.document_id,
+                    owner_id=job.owner_id,
+                )
                 raise
 
+        try:
+            await get_vector_store().cleanup_inactive_document_records(
+                owner_id=job.owner_id,
+                document_id=job.document_id,
+                active_ingestion_generation=result.ingestion_generation,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Could not clean inactive vectors for document %s.",
+                job.document_id,
+            )
+
         await self._mark_completed(job.id)
+
+    async def _mark_document_failed(
+        self,
+        *,
+        document_id: UUID,
+        owner_id: UUID,
+    ) -> None:
+        active_generation = None
+        async with AsyncSessionFactory() as session:
+            repository = SQLAlchemyDocumentRepository(session)
+            document = await repository.get_by_id(document_id)
+            if document is None or document.owner_id != owner_id:
+                return
+            document.mark_as_failed()
+            await repository.update(document)
+            await session.commit()
+            active_generation = document.active_ingestion_generation
+
+        try:
+            await get_vector_store().cleanup_inactive_document_records(
+                owner_id=owner_id,
+                document_id=document_id,
+                active_ingestion_generation=active_generation,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Could not clean failed ingestion vectors for document %s.",
+                document_id,
+            )
 
     async def _mark_completed(self, job_id: UUID) -> None:
         async with AsyncSessionFactory() as session:

@@ -24,7 +24,6 @@ export default function ForgotPasswordPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [debugToken, setDebugToken] = useState("");
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>,
@@ -32,13 +31,11 @@ export default function ForgotPasswordPage() {
     event.preventDefault();
     setError("");
     setMessage("");
-    setDebugToken("");
     setIsLoading(true);
 
     try {
       const result = await requestPasswordReset(email);
       setMessage(result.message);
-      setDebugToken(result.debug_token ?? "");
     } catch (requestError) {
       setError(getApiErrorMessage(requestError));
     } finally {
@@ -93,24 +90,6 @@ export default function ForgotPasswordPage() {
               {isLoading ? "Preparing link..." : "Send reset link"}
             </button>
           </form>
-
-          {debugToken && (
-            <div className="developer-token-card">
-              <strong>Local development token</strong>
-              <p>
-                Mail delivery is configured as a local outbox. Use
-                this token to test the reset screen.
-              </p>
-              <Link
-                className="secondary-button"
-                to={`/reset-password?token=${encodeURIComponent(
-                  debugToken,
-                )}`}
-              >
-                Open reset screen
-              </Link>
-            </div>
-          )}
 
           <Link className="auth-back-link" to="/">
             <ArrowLeft size={17} />
